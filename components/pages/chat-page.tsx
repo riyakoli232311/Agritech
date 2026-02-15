@@ -6,9 +6,10 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { LanguageSelector } from "@/components/language-selector"
-import { chatMessages, suggestedPrompts } from "@/data/mock-data"
-import { Send, Mic, Sparkles, User, Bot } from "lucide-react"
+import { farmerProfile, schemes, suggestedPrompts } from "@/data/mock-data"
+import { Send, Mic, MicOff, Sparkles, User, Bot, Volume2 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import Groq from "groq-sdk"
 
 interface ChatPageProps {
   onNavigate: (page: string) => void
@@ -21,23 +22,22 @@ type Message = {
   timestamp: string
 }
 
-const mockResponses: Record<string, string> = {
-  "what schemes am i eligible for?":
-    "Based on your profile analysis, you are eligible for 5 government schemes:\n\n1. **PM-KISAN Samman Nidhi** (98% match) - Rs. 6,000/year direct income support\n2. **Pradhan Mantri Fasal Bima Yojana** (92% match) - Crop insurance up to Rs. 2,00,000\n3. **Soil Health Card Scheme** (95% match) - Free soil testing and recommendations\n4. **PMKSY Irrigation Subsidy** (88% match) - Up to 55% subsidy on micro-irrigation\n5. **Kisan Credit Card** (85% match) - Credit up to Rs. 3,00,000\n\nWould you like me to explain any specific scheme in detail?",
-  "how to apply for pm-kisan?":
-    "Here are the steps to apply for PM-KISAN Samman Nidhi:\n\n**Step 1:** Go to the Scheme Recommendations page and click 'Apply Now' on PM-KISAN\n\n**Step 2:** Upload required documents:\n- Aadhaar Card (already verified)\n- Land Records (already verified)\n- Bank Passbook (pending verification)\n\n**Step 3:** Submit the application for district-level review\n\n**Step 4:** Once approved, Rs. 2,000 will be credited to your bank account every 4 months\n\nYour Aadhaar and Land Records are already verified. You just need to update your Bank Passbook and you can apply immediately!",
-  default:
-    "Thank you for your question. Based on your farmer profile in Indore, Madhya Pradesh, I can help you with scheme eligibility, application guidance, document requirements, and more. Could you please be more specific about what you would like to know? You can ask about specific schemes, eligibility criteria, or application processes.",
-}
-
 export function ChatPage({ onNavigate: _onNavigate }: ChatPageProps) {
-  const [messages, setMessages] = useState<Message[]>(
-    chatMessages as Message[]
-  )
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      id: "welcome",
+      role: "assistant",
+      content: "Namaste! I am your KisanMitra AI assistant. I can help you discover government schemes, check your eligibility, and guide you through the application process. How can I help you today?",
+      timestamp: new Date().toISOString(),
+    }
+  ])
   const [input, setInput] = useState("")
   const [isTyping, setIsTyping] = useState(false)
+  const [isListening, setIsListening] = useState(false)
+  const [isSpeaking, setIsSpeaking] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const recognitionRef = useRef<any>(null)
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -45,7 +45,77 @@ export function ChatPage({ onNavigate: _onNavigate }: ChatPageProps) {
     }
   }, [messages, isTyping])
 
-  const sendMessage = (text: string) => {
+  // Initialize speech recognition
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+      if (SpeechRecognition) {
+        recognitionRef.current = new SpeechRecognition()
+        recognitionRef.current.continuous = false
+        recognitionRef.current.interimResults = false
+        
+        // Support multiple languages
+        recognitionRef.current.lang = 'hi-IN' // Default to Hindi
+        
+        recognitionRef.current.onresult = (event: any) => {
+          const transcript = event.results[0][0].transcript
+          setInput(transcript)
+          setIsListening(false)
+        }
+
+        recognitionRef.current.onerror = (event: any) => {
+          console.error('Speech recognition error:', event.error)
+          setIsListening(false)
+        }
+
+        recognitionRef.current.onend = () => {
+          setIsListening(false)
+        }
+      }
+    }
+  }, [])
+
+  const toggleListening = () => {
+    if (!recognitionRef.current) {
+      alert('Voice input is not supported in your browser. Please use Chrome or Edge.')
+      return
+    }
+
+    if (isListening) {
+      recognitionRef.current.stop()
+      setIsListening(false)
+    } else {
+      recognitionRef.current.start()
+      setIsListening(true)
+    }
+  }
+
+  const speakResponse = (text: string) => {
+    if ('speechSynthesis' in window) {
+      // Cancel any ongoing speech
+      window.speechSynthesis.cancel()
+      
+      const utterance = new SpeechSynthesisUtterance(text)
+      utterance.lang = 'hi-IN' // Hindi voice
+      utterance.rate = 0.9 // Slightly slower for clarity
+      utterance.pitch = 1
+      
+      utterance.onstart = () => setIsSpeaking(true)
+      utterance.onend = () => setIsSpeaking(false)
+      utterance.onerror = () => setIsSpeaking(false)
+      
+      window.speechSynthesis.speak(utterance)
+    }
+  }
+
+  const stopSpeaking = () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel()
+      setIsSpeaking(false)
+    }
+  }
+
+  const sendMessage = async (text: string) => {
     if (!text.trim()) return
 
     const userMsg: Message = {
@@ -58,20 +128,66 @@ export function ChatPage({ onNavigate: _onNavigate }: ChatPageProps) {
     setInput("")
     setIsTyping(true)
 
-    setTimeout(() => {
-      const lower = text.toLowerCase()
-      const responseText =
-        mockResponses[lower] || mockResponses["default"]
+    try {
+      // Initialize Groq client
+      const groq = new Groq({
+        apiKey: process.env.NEXT_PUBLIC_GROQ_API_KEY,
+        dangerouslyAllowBrowser: true
+      })
+
+      // Create system prompt with farmer context
+      const systemPrompt = `You are KisanMitra AI assistant helping Indian farmers discover and apply for government schemes.
+
+FARMER PROFILE:
+- Name: ${farmerProfile.name}
+- Location: ${farmerProfile.village}, ${farmerProfile.district}, ${farmerProfile.state}
+- Land: ${farmerProfile.landSize} ${farmerProfile.landUnit} (${farmerProfile.landOwnership})
+- Crops: ${farmerProfile.cropTypes.join(", ")}
+- Income: Rs. ${farmerProfile.annualIncome}/year
+- Category: ${farmerProfile.farmerCategory}
+- Family Size: ${farmerProfile.familySize}
+
+AVAILABLE SCHEMES:
+${schemes.map(s => `- ${s.name}: ${s.description} (Benefit: ${s.benefitAmount})`).join('\n')}
+
+Respond in simple, clear Hindi-English mix (Hinglish) that farmers can easily understand. Keep responses concise (under 200 words) and actionable. Use bullet points for lists.`
+
+      // Call Groq API
+      const completion = await groq.chat.completions.create({
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: text }
+        ],
+        model: "llama-3.3-70b-versatile",
+        temperature: 0.7,
+        max_tokens: 500,
+      })
+
+      const aiResponse = completion.choices[0]?.message?.content || "Sorry, I couldn't process that. Please try again."
 
       const aiMsg: Message = {
         id: `msg-${Date.now()}-ai`,
         role: "assistant",
-        content: responseText,
+        content: aiResponse,
         timestamp: new Date().toISOString(),
       }
       setMessages((prev) => [...prev, aiMsg])
+      
+      // Auto-speak the response
+      speakResponse(aiResponse)
+      
+    } catch (error) {
+      console.error("Groq API error:", error)
+      const errorMsg: Message = {
+        id: `msg-${Date.now()}-error`,
+        role: "assistant",
+        content: "Sorry, I'm having trouble connecting. Please check your internet connection and try again.",
+        timestamp: new Date().toISOString(),
+      }
+      setMessages((prev) => [...prev, errorMsg])
+    } finally {
       setIsTyping(false)
-    }, 1500)
+    }
   }
 
   return (
@@ -87,16 +203,23 @@ export function ChatPage({ onNavigate: _onNavigate }: ChatPageProps) {
               KisanMitra AI Assistant
             </h3>
             <p className="text-xs text-muted-foreground">
-              Ask me anything about government schemes
+              {isListening ? "🎤 Listening..." : "Ask me anything about government schemes"}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <LanguageSelector />
-          <Button variant="outline" size="sm" className="gap-1.5">
-            <Mic className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Voice</span>
-          </Button>
+          {isSpeaking && (
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="gap-1.5 text-red-600"
+              onClick={stopSpeaking}
+            >
+              <Volume2 className="h-3.5 w-3.5 animate-pulse" />
+              <span className="hidden sm:inline">Stop</span>
+            </Button>
+          )}
         </div>
       </div>
 
@@ -134,15 +257,18 @@ export function ChatPage({ onNavigate: _onNavigate }: ChatPageProps) {
                 )}
               >
                 <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                  {msg.content.split(/(\*\*[^*]+\*\*)/).map((part, i) => {
-                    if (part.startsWith("**") && part.endsWith("**")) {
-                      return (
-                        <strong key={i}>{part.slice(2, -2)}</strong>
-                      )
-                    }
-                    return part
-                  })}
+                  {msg.content}
                 </div>
+                {msg.role === "assistant" && (
+                  <button
+                    onClick={() => speakResponse(msg.content)}
+                    className="mt-2 flex items-center gap-1 text-xs text-muted-foreground hover:text-primary"
+                    title="Read aloud"
+                  >
+                    <Volume2 className="h-3 w-3" />
+                    Listen
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -168,7 +294,7 @@ export function ChatPage({ onNavigate: _onNavigate }: ChatPageProps) {
       {messages.length <= 1 && (
         <div className="border-t border-border bg-card/50 px-4 py-3">
           <p className="mb-2 text-xs font-medium text-muted-foreground">
-            Suggested questions
+            Suggested questions (or click mic to speak)
           </p>
           <div className="flex flex-wrap gap-2">
             {suggestedPrompts.map((prompt) => (
@@ -195,20 +321,28 @@ export function ChatPage({ onNavigate: _onNavigate }: ChatPageProps) {
         >
           <Button
             type="button"
-            variant="ghost"
+            variant={isListening ? "default" : "ghost"}
             size="icon"
-            className="shrink-0"
+            className={cn(
+              "shrink-0",
+              isListening && "animate-pulse bg-red-500 hover:bg-red-600"
+            )}
+            onClick={toggleListening}
           >
-            <Mic className="h-4 w-4" />
+            {isListening ? (
+              <MicOff className="h-4 w-4" />
+            ) : (
+              <Mic className="h-4 w-4" />
+            )}
             <span className="sr-only">Voice input</span>
           </Button>
           <Input
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Type your question..."
+            placeholder={isListening ? "Listening..." : "Type or speak your question..."}
             className="flex-1"
-            disabled={isTyping}
+            disabled={isTyping || isListening}
           />
           <Button
             type="submit"
