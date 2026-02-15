@@ -23,6 +23,7 @@ type Message = {
 }
 
 export function ChatPage({ onNavigate: _onNavigate }: ChatPageProps) {
+  const [selectedLanguage, setSelectedLanguage] = useState("en")
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "welcome",
@@ -54,8 +55,20 @@ export function ChatPage({ onNavigate: _onNavigate }: ChatPageProps) {
         recognitionRef.current.continuous = false
         recognitionRef.current.interimResults = false
         
-        // Support multiple languages
-        recognitionRef.current.lang = 'hi-IN' // Default to Hindi
+        // Map language codes to speech recognition codes
+        const langMap: Record<string, string> = {
+          'en': 'en-IN',
+          'hi': 'hi-IN',
+          'mr': 'mr-IN',
+          'ta': 'ta-IN',
+          'te': 'te-IN',
+          'kn': 'kn-IN',
+          'ml': 'ml-IN',
+          'gu': 'gu-IN',
+          'pa': 'pa-IN',
+          'bn': 'bn-IN'
+        }
+        recognitionRef.current.lang = langMap[selectedLanguage] || 'hi-IN'
         
         recognitionRef.current.onresult = (event: any) => {
           const transcript = event.results[0][0].transcript
@@ -73,7 +86,7 @@ export function ChatPage({ onNavigate: _onNavigate }: ChatPageProps) {
         }
       }
     }
-  }, [])
+  }, [selectedLanguage])
 
   const toggleListening = () => {
     if (!recognitionRef.current) {
@@ -96,7 +109,21 @@ export function ChatPage({ onNavigate: _onNavigate }: ChatPageProps) {
       window.speechSynthesis.cancel()
       
       const utterance = new SpeechSynthesisUtterance(text)
-      utterance.lang = 'hi-IN' // Hindi voice
+      
+      // Map language codes to speech synthesis codes
+      const langMap: Record<string, string> = {
+        'en': 'en-IN',
+        'hi': 'hi-IN',
+        'mr': 'mr-IN',
+        'ta': 'ta-IN',
+        'te': 'te-IN',
+        'kn': 'kn-IN',
+        'ml': 'ml-IN',
+        'gu': 'gu-IN',
+        'pa': 'pa-IN',
+        'bn': 'bn-IN'
+      }
+      utterance.lang = langMap[selectedLanguage] || 'hi-IN'
       utterance.rate = 0.9 // Slightly slower for clarity
       utterance.pitch = 1
       
@@ -136,7 +163,28 @@ export function ChatPage({ onNavigate: _onNavigate }: ChatPageProps) {
       })
 
       // Create system prompt with farmer context
+      const languageInstructions: Record<string, string> = {
+        'en': 'Respond in English',
+        'hi': 'Respond in Hindi (हिन्दी)',
+        'mr': 'Respond in Marathi (मराठी)',
+        'ta': 'Respond in Tamil (தமிழ்)',
+        'te': 'Respond in Telugu (తెలుగు)',
+        'kn': 'Respond in Kannada (ಕನ್ನಡ)',
+        'ml': 'Respond in Malayalam (മലയാളം)',
+        'gu': 'Respond in Gujarati (ગુજરાતી)',
+        'pa': 'Respond in Punjabi (ਪੰਜਾਬੀ)',
+        'bn': 'Respond in Bengali (বাংলা)',
+        'or': 'Respond in Odia (ଓଡ଼ିଆ)',
+        'as': 'Respond in Assamese (অসমীয়া)',
+        'ur': 'Respond in Urdu (اردو)',
+        'sd': 'Respond in Sindhi',
+        'ks': 'Respond in Kashmiri',
+        'ne': 'Respond in Nepali (नेपाली)'
+      }
+      
       const systemPrompt = `You are KisanMitra AI assistant helping Indian farmers discover and apply for government schemes.
+
+LANGUAGE INSTRUCTION: ${languageInstructions[selectedLanguage] || 'Respond in Hindi-English mix (Hinglish)'}. Use simple language that farmers can easily understand.
 
 FARMER PROFILE:
 - Name: ${farmerProfile.name}
@@ -150,7 +198,7 @@ FARMER PROFILE:
 AVAILABLE SCHEMES:
 ${schemes.map(s => `- ${s.name}: ${s.description} (Benefit: ${s.benefitAmount})`).join('\n')}
 
-Respond in simple, clear Hindi-English mix (Hinglish) that farmers can easily understand. Keep responses concise (under 200 words) and actionable. Use bullet points for lists.`
+Keep responses concise (under 200 words) and actionable. Use bullet points for lists when appropriate.`
 
       // Call Groq API
       const completion = await groq.chat.completions.create({
@@ -208,7 +256,10 @@ Respond in simple, clear Hindi-English mix (Hinglish) that farmers can easily un
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <LanguageSelector />
+          <LanguageSelector 
+            value={selectedLanguage}
+            onValueChange={setSelectedLanguage}
+          />
           {isSpeaking && (
             <Button 
               variant="outline" 
